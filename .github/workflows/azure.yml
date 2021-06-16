@@ -53,4 +53,4 @@ jobs:
         app-name: ${{ env.AZURE_WEBAPP_NAME }}
         publish-profile: ${{ secrets.WEBAPP_ADT_ROCKS }}
         package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
-      
+        startUpCommand: 'npm run start'
