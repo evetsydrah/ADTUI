@@ -47,10 +47,18 @@ jobs:
         npm install 
         npm run build --if-present 
       working-directory: ${{env.working-directory}}
-    - name: 'Deploy to Azure WebApp'
-      uses: azure/webapps-deploy@v2
+      
+    - name: Azure Container Registry Login
+      uses: Azure/docker-login@v1
       with:
-        app-name: ${{ env.AZURE_WEBAPP_NAME }}
-        publish-profile: ${{ secrets.WEBAPP_ADT_ROCKS }}
-        package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
-        startUpCommand: 'npm run start'
+        # Container registry username
+        username: titancrm
+        # Container registry password
+        password: Gb+t1EdAMeVGNGkgsMhmqj=y1DOlzU++
+        # Container registry server url
+        login-server: titancrm.azurecr.io
+    - name: Build the Docker image
+      run: |
+        docker build . --file "ADTUIOriginal/Dockerfile" --tag titancrm.azurecr.io/ADTUI:${{ github.sha }}
+        docker push titancrm.azurecr.io/ADTUI:${{ github.sha }}
+        
