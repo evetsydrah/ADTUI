@@ -14,7 +14,11 @@ For out-of-the-box usage, directly install node library and run
 1. Run "npm install"
 2. Executed "az login" if you have not
 3. run "npm start"
-
+```diff
+- NOTE: if you want to specify the azure subscription id, please use command as below 
+- (fill in your preferred azure subscription id)
+- node .\backendSourceCode\server.js --subscription c7b211ba-6f34-45b8-8764-079581e882ea
+```
 It will pop up a browser window with initial dialog to choose which ADT service instance you want to operate.
 
 For developer's usage, there are additional npm run options (inside folder ./ADTUIOriginal) to use
@@ -72,6 +76,7 @@ The application is created as an single web page application that accesses azure
 A more comprehensive platform is in [Azure IoT Rocks Platform](azureiotrocks-platform.md) , which including ADT UI and other Azure IoT services. It is a B2C platform so anyone can use it for a taste of Azure IoT without need for Azure subscription.
 
 ### New Feature update
+- Mouse over twin or connection line will flah information
 - ADT DTDL model can be created with GUI in application
 - Rehaul UI to be align with the coming cloud host platform version
 - Ehance editing functionality so you can easily creat right angle edge segments (like 90 degree) and align nodes in horizontal or vertial level

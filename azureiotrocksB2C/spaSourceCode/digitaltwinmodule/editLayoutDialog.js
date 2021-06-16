@@ -1,6 +1,7 @@
-const adtInstanceSelectionDialog = require("./adtInstanceSelectionDialog")
 const simpleSelectMenu= require("./simpleSelectMenu")
 const simpleConfirmDialog = require("./simpleConfirmDialog")
+const globalCache=require("./globalCache")
+const msalHelper=require("../msalHelper")
 
 function editLayoutDialog() {
     if(!this.DOM){
@@ -8,35 +9,12 @@ function editLayoutDialog() {
         $("body").append(this.DOM)
         this.DOM.hide()
     }
-    this.layoutJSON={}
-    this.currentLayoutName=null
-}
-
-editLayoutDialog.prototype.getCurADTName=function(){
-    var adtName = adtInstanceSelectionDialog.selectedADT
-    var str = adtName.replace("https://", "")
-    return str
-}
-
-editLayoutDialog.prototype.rxMessage=function(msgPayload){
-    if(msgPayload.message=="ADTDatasourceChange_replace") {
-        try{
-            $.post("layout/readLayouts",{adtName:this.getCurADTName()}, (data, status) => {
-                if(data!="" && typeof(data)==="object") this.layoutJSON=data;
-                else this.layoutJSON={};
-                this.broadcastMessage({ "message": "layoutsUpdated"})
-            })
-        }catch(e){
-            console.log(e)
-        }
-    
-    }
 }
 
 editLayoutDialog.prototype.refillOptions = function () {
     this.switchLayoutSelector.clearOptions()
     
-    for(var ind in this.layoutJSON){
+    for(var ind in globalCache.layoutJSON){
         this.switchLayoutSelector.addOption(ind)
     }
 }
@@ -53,12 +31,12 @@ editLayoutDialog.prototype.popup = function () {
 
     var nameInput=$('<input type="text" style="outline:none; width:180px; display:inline;margin-left:2px;margin-right:2px"  placeholder="Fill in a new layout name..."/>').addClass("w3-input w3-border");   
     this.DOM.append(nameInput)
-    var saveAsNewBtn=$('<button class="w3-button w3-green w3-hover-light-green">Save As New</button>')
+    var saveAsNewBtn=$('<button class="w3-button w3-green w3-hover-light-green">Save New Layout</button>')
     this.DOM.append(saveAsNewBtn)
     saveAsNewBtn.on("click",()=>{this.saveIntoLayout(nameInput.val())})
 
 
-    if(!jQuery.isEmptyObject(this.layoutJSON)){
+    if(!jQuery.isEmptyObject(globalCache.layoutJSON)){
         var lbl=$('<div class="w3-bar w3-padding-16" style="text-align:center;">- OR -</div>')
         this.DOM.append(lbl) 
         var switchLayoutSelector=new simpleSelectMenu("",{fontSize:"1em",colorClass:"w3-light-gray",width:"120px"})
@@ -75,8 +53,8 @@ editLayoutDialog.prototype.popup = function () {
         saveAsBtn.on("click",()=>{this.saveIntoLayout(switchLayoutSelector.curSelectVal)})
         deleteBtn.on("click",()=>{this.deleteLayout(switchLayoutSelector.curSelectVal)})
 
-        if(this.currentLayoutName!=null){
-            switchLayoutSelector.triggerOptionValue(this.currentLayoutName)
+        if(globalCache.currentLayoutName!=null){
+            switchLayoutSelector.triggerOptionValue(globalCache.currentLayoutName)
         }else{
             switchLayoutSelector.triggerOptionIndex(0)
         }
@@ -88,7 +66,7 @@ editLayoutDialog.prototype.saveIntoLayout = function (layoutName) {
         alert("Please choose target layout Name")
         return
     }
-    this.broadcastMessage({ "message": "saveLayout", "layoutName": layoutName, "adtName":this.getCurADTName() })
+    this.broadcastMessage({ "message": "saveLayout", "layoutName": layoutName})
     this.DOM.hide()
 }
 
@@ -105,17 +83,22 @@ editLayoutDialog.prototype.deleteLayout = function (layoutName) {
         { width: "250px" },
         {
             title: "Confirm"
-            , content: "Please confirm deleting layout \"" + layoutName + "\"?"
+            , content: "Confirm deleting layout \"" + layoutName + "\"?"
             , buttons:[
                 {
-                    colorClass: "w3-red w3-hover-pink", text: "Confirm", "clickFunc": () => {
-                        delete this.layoutJSON[layoutName]
-                        if (layoutName == this.currentLayoutName) this.currentLayoutName = null
-                        this.broadcastMessage({ "message": "layoutsUpdated" })
-                        $.post("layout/saveLayouts", { "adtName": this.getCurADTName(), "layouts": JSON.stringify(this.layoutJSON) })
-                        confirmDialogDiv.close();
+                    colorClass: "w3-red w3-hover-pink", text: "Confirm", "clickFunc": async () => {
+                        delete globalCache.layoutJSON[layoutName]
+                        if (layoutName == globalCache.currentLayoutName) globalCache.currentLayoutName = null
+                        confirmDialogDiv.close()
+                        this.broadcastMessage({ "message": "layoutsUpdated"})
                         this.refillOptions()
                         this.switchLayoutSelector.triggerOptionIndex(0)
+                        try{
+                            await msalHelper.callAPI("digitaltwin/deleteLayout", "POST", { "layoutName": layoutName })
+                        }catch(e){
+                            console.log(e)
+                            if(e.responseText) alert(e.responseText)
+                        }
                     }
                 },
                 {

@@ -1,17 +1,40 @@
 const simpleTree=require("./simpleTree")
 const modelAnalyzer=require("./modelAnalyzer")
-const adtInstanceSelectionDialog = require("./adtInstanceSelectionDialog")
+const globalCache = require("./globalCache")
+
 
 function twinsTree(DOM, searchDOM) {
     this.tree=new simpleTree(DOM)
     this.modelIDMapToName={}
+
+    this.tree.options.groupNodeIconFunc=(gn)=>{
+        var modelClass=gn.info["@id"]
+        var colorCode="gray"
+        var shape="ellipse"
+        var avatar=null
+        if(globalCache.visualDefinition[globalCache.selectedADT] && globalCache.visualDefinition[globalCache.selectedADT][modelClass]){
+            var visualJson =globalCache.visualDefinition[globalCache.selectedADT][modelClass]
+            var colorCode= visualJson.color || "gray"
+            var shape=  visualJson.shape || "ellipse"
+            var avarta= visualJson.avarta 
+        }
+        var fontsize={"ellipse":"font-size:130%","round-rectangle":"font-size:60%;padding-left:2px","hexagon":"font-size:90%"}[shape]
+        shape={"ellipse":"●","round-rectangle":"▉","hexagon":"⬢"}[shape]
+        
+        var lblHTML="<label style='display:inline;color:"+colorCode+";"+fontsize+";font-weight:normal;vertical-align:middle;border-radius: 2px;'>"+shape+"</label>"
+
+        if(avarta) lblHTML+="<img src='"+avarta+"' style='height:20px'/>"
+
+        return $(lblHTML)
+    }
 
     this.tree.callback_afterSelectNodes=(nodesArr,mouseClickDetail)=>{
         var infoArr=[]
         nodesArr.forEach((item, index) =>{
             infoArr.push(item.leafInfo)
         });
-        this.broadcastMessage({ "message": "selectNodes", info:infoArr, "mouseClickDetail":mouseClickDetail})
+        globalCache.showingCreateTwinModelID=null; 
+        this.broadcastMessage({ "message": "showInfoSelectedNodes", info:infoArr, "mouseClickDetail":mouseClickDetail})
     }
 
     this.tree.callback_afterDblclickNode=(theNode)=>{
@@ -19,12 +42,30 @@ function twinsTree(DOM, searchDOM) {
     }
 
     this.tree.callback_afterSelectGroupNode=(nodeInfo)=>{
-        this.broadcastMessage({"message":"selectGroupNode",info:nodeInfo})
+        this.broadcastMessage({"message":"showInfoGroupNode",info:nodeInfo})
     }
 
     this.searchBox=$('<input type="text"  placeholder="search..."/>').addClass("w3-input");
     this.searchBox.css({"outline":"none","height":"100%","width":"100%"}) 
     searchDOM.append(this.searchBox)
+
+    var hideOrShowEmptyGroup=$('<button style="height:20px;border:none;padding-left:2px" class="w3-block w3-tiny w3-hover-red w3-amber">Hide Empty Models</button>')
+    searchDOM.append(hideOrShowEmptyGroup)
+    DOM.css("top","50px")
+    hideOrShowEmptyGroup.attr("status","show")
+    hideOrShowEmptyGroup.on("click",()=>{
+        if(hideOrShowEmptyGroup.attr("status")=="show"){
+            hideOrShowEmptyGroup.attr("status","hide")
+            hideOrShowEmptyGroup.text("Show Empty Models")
+            this.tree.options.hideEmptyGroup=true
+        }else{
+            hideOrShowEmptyGroup.attr("status","show")
+            hideOrShowEmptyGroup.text("Hide Empty Models")
+            delete this.tree.options.hideEmptyGroup
+        }
+        this.tree.groupNodes.forEach(oneGroupNode=>{oneGroupNode.checkOptionHideEmptyGroup()})
+    })
+
 
     this.searchBox.keyup((e)=>{
         if(e.keyCode == 13)
@@ -45,7 +86,15 @@ twinsTree.prototype.rxMessage=function(msgPayload){
     else if(msgPayload.message=="drawTwinsAndRelations") this.drawTwinsAndRelations(msgPayload.info)
     else if(msgPayload.message=="ADTModelsChange") this.refreshModels(msgPayload.models)
     else if(msgPayload.message=="addNewTwin") this.drawOneTwin(msgPayload.twinInfo)
+    else if(msgPayload.message=="addNewTwins") {
+        msgPayload.twinsInfo.forEach(oneTwinInfo=>{this.drawOneTwin(oneTwinInfo)})
+    }
     else if(msgPayload.message=="twinsDeleted") this.deleteTwins(msgPayload.twinIDArr)
+    else if(msgPayload.message=="visualDefinitionChange"){
+        if(!msgPayload.srcModelID){ // change model class visualization
+            this.tree.groupNodes.forEach(gn=>{gn.refreshName()})
+        } 
+    }
 }
 
 twinsTree.prototype.deleteTwins=function(twinIDArr){
@@ -86,7 +135,7 @@ twinsTree.prototype.ADTDatasourceChange_append=function(twinQueryStr,twinsData){
     else {
         $.post("queryADT/allTwinsInfo", { query: twinQueryStr }, (data) => {
             if(data=="") return;
-            data.forEach((oneNode)=>{adtInstanceSelectionDialog.storedTwins[oneNode["$dtId"]] = oneNode});
+            data.forEach((oneNode)=>{globalCache.storedTwins[oneNode["$dtId"]] = oneNode});
             this.appendAllTwins(data)
         })
     }
@@ -103,7 +152,7 @@ twinsTree.prototype.ADTDatasourceChange_replace=function(twinQueryStr,twinsData,
         else {
             $.post("queryADT/allTwinsInfo", { query: twinQueryStr }, (data) => {
                 if(data=="") data=[];
-                data.forEach((oneNode)=>{adtInstanceSelectionDialog.storedTwins[oneNode["$dtId"]] = oneNode});
+                data.forEach((oneNode)=>{globalCache.storedTwins[oneNode["$dtId"]] = oneNode});
                 this.replaceAllTwins(data)
             })
         }
@@ -143,7 +192,7 @@ twinsTree.prototype.ADTDatasourceChange_replace=function(twinQueryStr,twinsData,
             else {
                 $.post("queryADT/allTwinsInfo", { query: twinQueryStr }, (data) => {
                     if(data=="") data=[];
-                    data.forEach((oneNode)=>{adtInstanceSelectionDialog.storedTwins[oneNode["$dtId"]] = oneNode});
+                    data.forEach((oneNode)=>{globalCache.storedTwins[oneNode["$dtId"]] = oneNode});
                     this.replaceAllTwins(data)
                 })
             }
@@ -158,7 +207,25 @@ twinsTree.prototype.drawTwinsAndRelations= function(data){
             this.drawOneTwin(oneTwin)
         }
     })
+
+    //draw those known twins from the relationships
+    var twinsInfo={}
+    data.childTwinsAndRelations.forEach(oneSet=>{
+        var relationsInfo=oneSet["relationships"]
+        relationsInfo.forEach((oneRelation)=>{
+            var srcID=oneRelation['$sourceId']
+            var targetID=oneRelation['$targetId']
+            if(globalCache.storedTwins[srcID])
+                twinsInfo[srcID] = globalCache.storedTwins[srcID]
+            if(globalCache.storedTwins[targetID])
+                twinsInfo[targetID] = globalCache.storedTwins[targetID]    
+        })
+    })
+    var tmpArr=[]
+    for(var twinID in twinsInfo) tmpArr.push(twinsInfo[twinID])
+    tmpArr.forEach(oneTwin=>{this.drawOneTwin(oneTwin)})
 }
+
 twinsTree.prototype.drawOneTwin= function(twinInfo){
     var groupName=this.modelIDMapToName[twinInfo["$metadata"]["$model"]]
     this.tree.addLeafnodeToGroup(groupName,twinInfo,"skipRepeat")
@@ -170,7 +237,7 @@ twinsTree.prototype.appendAllTwins= function(data){
     this.tree.groupNodes.forEach((gNode)=>{
         gNode.childLeafNodes.forEach(leafNode=>{
             var nodeId=leafNode.leafInfo["$dtId"]
-            if(adtInstanceSelectionDialog.storedOutboundRelationships[nodeId]==null) twinIDArr.push(nodeId)
+            if(globalCache.storedOutboundRelationships[nodeId]==null) twinIDArr.push(nodeId)
         })
     })
 
@@ -200,7 +267,7 @@ twinsTree.prototype.fetchAllRelationships= async function(twinIDArr){
         var smallArr= twinIDArr.splice(0, 100);
         var data=await this.fetchPartialRelationships(smallArr)
         if(data=="") continue;
-        adtInstanceSelectionDialog.storeTwinRelationships(data) //store them in global available array
+        globalCache.storeTwinRelationships(data) //store them in global available array
         this.broadcastMessage({ "message": "drawAllRelations",info:data})
     }
 }

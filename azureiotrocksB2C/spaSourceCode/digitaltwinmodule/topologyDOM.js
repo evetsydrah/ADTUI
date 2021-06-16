@@ -1,15 +1,14 @@
 'use strict';
 
-const modelManagerDialog = require("./modelManagerDialog");
-const adtInstanceSelectionDialog = require("./adtInstanceSelectionDialog");
 const modelAnalyzer = require("./modelAnalyzer");
-const editLayoutDialog = require("./editLayoutDialog")
 const formatter = new Intl.NumberFormat('en-US', {
     minimumFractionDigits: 3,
     maximumFractionDigits: 3,
 });
 const simpleSelectMenu = require("./simpleSelectMenu")
-
+const simpleConfirmDialog = require("./simpleConfirmDialog")
+const globalCache = require("./globalCache")
+const msalHelper=require("../msalHelper")
 
 function topologyDOM(DOM){
     this.DOM=DOM
@@ -62,8 +61,10 @@ topologyDOM.prototype.init=function(){
                     'font-size':"12px",
                     'font-family':'Geneva, Arial, Helvetica, sans-serif'
                     //,'background-image': function(ele){ return "images/cat.png"; }
-                    ,'background-fit':'contain' //cover
+                    //,'background-fit':'contain' //cover
                     //'background-color': function( ele ){ return ele.data('bg') }
+                    ,'background-width':'70%'
+                    ,'background-height':'70%'
                 }
             },
             {
@@ -89,6 +90,15 @@ topologyDOM.prototype.init=function(){
                 'border-color':"red",
                 'border-width':2,
                 'background-color': 'Gray'
+            }},
+            {selector: 'node.hover',
+            style: {
+                'background-blacken':0.5
+            }}
+            
+            ,{selector: 'edge.hover',
+            style: {
+                'width':5
             }}
             
         ]
@@ -120,14 +130,26 @@ topologyDOM.prototype.init=function(){
     this.core.on('cxttap',(e)=>{
         this.cancelTargetNodeMode()
     })
+
+    this.core.on('mouseover',e=>{
+
+        this.mouseOverFunction(e)
+    })
+    this.core.on('mouseout',e=>{
+        this.mouseOutFunction(e)
+    })
     
     this.core.on('zoom',(e)=>{
         var fs=this.getFontSizeInCurrentZoom();
         var dimension=this.getNodeSizeInCurrentZoom();
         this.core.style()
-                .selector('node')
-                .style({ 'font-size': fs, width:dimension ,height:dimension })
-                .update()
+            .selector('node')
+            .style({ 'font-size': fs, width: dimension, height: dimension })
+            .update()
+        this.core.style()
+            .selector('node:selected')
+            .style({ 'border-width': Math.ceil(dimension / 15) })
+            .update()
     })
 
     var instance = this.core.edgeEditing('get');
@@ -200,12 +222,39 @@ topologyDOM.prototype.smartPositionNode = function (mousePosition) {
     //console.log(monitorSet.size())
 }
 
+topologyDOM.prototype.mouseOverFunction= function (e) {
+    if(!e.target.data) return
+    if(e.target.isEdge && e.target.isEdge() && e.target.selected()) return; 
+    //hover make "add bend point" menu difficult to show, so avoid add hover effect to selectd edge
+    
+    var info=e.target.data().originalInfo
+    if(info==null) return;
+    if(this.lastHoverTarget) this.lastHoverTarget.removeClass("hover")
+    this.lastHoverTarget=e.target
+    e.target.addClass("hover")
+    this.broadcastMessage({ "message": "showInfoSelectedNodes", "info": [info] })
+}
+
+topologyDOM.prototype.mouseOutFunction= function (e) {
+    if(globalCache.showingCreateTwinModelID){
+        this.broadcastMessage({ "message": "showInfoGroupNode", "info": {"@id":globalCache.showingCreateTwinModelID} })
+    }else{
+        this.selectFunction()
+    }
+    if(this.lastHoverTarget){
+        this.lastHoverTarget.removeClass("hover")
+        this.lastHoverTarget=null;
+    } 
+
+}
+
 topologyDOM.prototype.selectFunction = function () {
     var arr = this.core.$(":selected")
     if (arr.length == 0) return
     var re = []
     arr.forEach((ele) => { re.push(ele.data().originalInfo) })
-    this.broadcastMessage({ "message": "selectNodes", info: re })
+    globalCache.showingCreateTwinModelID=null; 
+    this.broadcastMessage({ "message": "showInfoSelectedNodes", info: re })
 
     //for debugging purpose
     //arr.forEach((ele)=>{
@@ -258,6 +307,14 @@ topologyDOM.prototype.updateModelTwinColor=function(modelID,colorCode){
         .style({'background-color': colorCode})
         .update()   
 }
+
+topologyDOM.prototype.updateModelTwinShape=function(modelID,shape){
+    this.core.style()
+        .selector('node[modelID = "'+modelID+'"]')
+        .style({'shape': shape})
+        .update()   
+}
+
 topologyDOM.prototype.updateRelationshipColor=function(srcModelID,relationshipName,colorCode){
     this.core.style()
         .selector('edge[sourceModel = "'+srcModelID+'"][relationshipName = "'+relationshipName+'"]')
@@ -265,11 +322,19 @@ topologyDOM.prototype.updateRelationshipColor=function(srcModelID,relationshipNa
         .update()   
 }
 
+topologyDOM.prototype.updateRelationshipShape=function(srcModelID,relationshipName,shape){
+    this.core.style()
+        .selector('edge[sourceModel = "'+srcModelID+'"][relationshipName = "'+relationshipName+'"]')
+        .style({'line-style': shape})
+        .update()   
+}
+
 topologyDOM.prototype.deleteRelations=function(relations){
     relations.forEach(oneRelation=>{
         var srcID=oneRelation["srcID"]
         var relationID=oneRelation["relID"]
-        var theNode=this.core.filter('[id = "'+srcID+'"]');
+        var theNodeName=globalCache.twinIDMapToDisplayName[srcID]
+        var theNode=this.core.filter('[id = "'+theNodeName+'"]');
         var edges=theNode.connectedEdges().toArray()
         for(var i=0;i<edges.length;i++){
             var anEdge=edges[i]
@@ -284,7 +349,8 @@ topologyDOM.prototype.deleteRelations=function(relations){
 
 topologyDOM.prototype.deleteTwins=function(twinIDArr){
     twinIDArr.forEach(twinID=>{
-        this.core.$('[id = "'+twinID+'"]').remove()
+        var twinDisplayName=globalCache.twinIDMapToDisplayName[twinID]
+        this.core.$('[id = "'+twinDisplayName+'"]').remove()
     })   
 }
 
@@ -312,11 +378,12 @@ topologyDOM.prototype.drawTwins=function(twinsData,animation){
         var originalInfo=twinsData[i];
         var newNode={data:{},group:"nodes"}
         newNode.data["originalInfo"]= originalInfo;
-        newNode.data["id"]=originalInfo['$dtId']
+        newNode.data["id"]=originalInfo['displayName']
         var modelID=originalInfo['$metadata']['$model']
         newNode.data["modelID"]=modelID
         arr.push(newNode)
     }
+
     var eles = this.core.add(arr)
     if(eles.size()==0) return eles
     this.noPosition_grid(eles)
@@ -339,8 +406,10 @@ topologyDOM.prototype.drawRelations=function(relationsData){
         var aRelation={data:{},group:"edges"}
         aRelation.data["originalInfo"]=originalInfo
         aRelation.data["id"]=theID
-        aRelation.data["source"]=originalInfo['$sourceId']
-        aRelation.data["target"]=originalInfo['$targetId']
+        aRelation.data["source"]=globalCache.twinIDMapToDisplayName[originalInfo['$sourceId']]
+        aRelation.data["target"]=globalCache.twinIDMapToDisplayName[originalInfo['$targetId']]
+
+
         if(this.core.$("#"+aRelation.data["source"]).length==0 || this.core.$("#"+aRelation.data["target"]).length==0) continue
         var sourceNode=this.core.$("#"+aRelation.data["source"])
         var sourceModel=sourceNode[0].data("originalInfo")['$metadata']['$model']
@@ -367,22 +436,20 @@ topologyDOM.prototype.drawRelations=function(relationsData){
 topologyDOM.prototype.reviewStoredRelationshipsToDraw=function(){
     //check the storedOutboundRelationships again and maybe some of them can be drawn now since targetNode is available
     var storedRelationArr=[]
-    for(var twinID in adtInstanceSelectionDialog.storedOutboundRelationships){
-        storedRelationArr=storedRelationArr.concat(adtInstanceSelectionDialog.storedOutboundRelationships[twinID])
+    for(var twinID in globalCache.storedOutboundRelationships){
+        storedRelationArr=storedRelationArr.concat(globalCache.storedOutboundRelationships[twinID])
     }
     this.drawRelations(storedRelationArr)
 }
 
 topologyDOM.prototype.drawTwinsAndRelations=function(data){
     var twinsAndRelations=data.childTwinsAndRelations
-    var combineTwins=this.core.collection()
 
     //draw those new twins first
     twinsAndRelations.forEach(oneSet=>{
         var twinInfoArr=[]
         for(var ind in oneSet.childTwins) twinInfoArr.push(oneSet.childTwins[ind])
         var eles=this.drawTwins(twinInfoArr,"animation")
-        combineTwins=combineTwins.union(eles)
     })
 
     //draw those known twins from the relationships
@@ -392,10 +459,10 @@ topologyDOM.prototype.drawTwinsAndRelations=function(data){
         relationsInfo.forEach((oneRelation)=>{
             var srcID=oneRelation['$sourceId']
             var targetID=oneRelation['$targetId']
-            if(adtInstanceSelectionDialog.storedTwins[srcID])
-                twinsInfo[srcID] = adtInstanceSelectionDialog.storedTwins[srcID]
-            if(adtInstanceSelectionDialog.storedTwins[targetID])
-                twinsInfo[targetID] = adtInstanceSelectionDialog.storedTwins[targetID]    
+            if(globalCache.storedTwins[srcID])
+                twinsInfo[srcID] = globalCache.storedTwins[srcID]
+            if(globalCache.storedTwins[targetID])
+                twinsInfo[targetID] = globalCache.storedTwins[targetID]    
         })
     })
     var tmpArr=[]
@@ -407,30 +474,33 @@ topologyDOM.prototype.drawTwinsAndRelations=function(data){
 }
 
 topologyDOM.prototype.applyVisualDefinition=function(){
-    var visualJson=modelManagerDialog.visualDefinition[adtInstanceSelectionDialog.selectedADT]
+    var visualJson=globalCache.visualDefinition["default"]
     if(visualJson==null) return;
     for(var modelID in visualJson){
-        if(visualJson[modelID].color){
-            this.updateModelTwinColor(modelID,visualJson[modelID].color)
-        }
-        if(visualJson[modelID].avarta){
-            this.updateModelAvarta(modelID,visualJson[modelID].avarta)
-        }
-        if(visualJson[modelID].relationships){
-            for(var relationshipName in visualJson[modelID].relationships)
-                this.updateRelationshipColor(modelID,relationshipName,visualJson[modelID].relationships[relationshipName])
+        if(visualJson[modelID].color) this.updateModelTwinColor(modelID,visualJson[modelID].color)
+        if(visualJson[modelID].shape) this.updateModelTwinShape(modelID,visualJson[modelID].shape)
+        if(visualJson[modelID].avarta) this.updateModelAvarta(modelID,visualJson[modelID].avarta)
+        if(visualJson[modelID].rels){
+            for(var relationshipName in visualJson[modelID].rels)
+                if(visualJson[modelID]["rels"][relationshipName].color){
+                    this.updateRelationshipColor(modelID,relationshipName,visualJson[modelID]["rels"][relationshipName].color)
+                }
+                if(visualJson[modelID]["rels"][relationshipName].shape){
+                    this.updateRelationshipShape(modelID,relationshipName,visualJson[modelID]["rels"][relationshipName].shape)
+                }
         }
     }
 }
 
 topologyDOM.prototype.rxMessage=function(msgPayload){
-    if(msgPayload.message=="ADTDatasourceChange_replace"){
+    if(msgPayload.message=="startSelection_replace"){
         this.core.nodes().remove()
-        this.applyVisualDefinition()
     }else if(msgPayload.message=="replaceAllTwins") {
         this.core.nodes().remove()
         var eles= this.drawTwins(msgPayload.info)
         this.core.center(eles)
+    }else if(msgPayload.message=="visualDefinitionRefresh") {
+        this.applyVisualDefinition()
     }else if(msgPayload.message=="appendAllTwins") {
         var eles= this.drawTwins(msgPayload.info,"animate")
         this.core.center(eles)
@@ -438,18 +508,20 @@ topologyDOM.prototype.rxMessage=function(msgPayload){
     }else if(msgPayload.message=="drawAllRelations"){
         var edges= this.drawRelations(msgPayload.info)
         if(edges!=null) {
-            if(editLayoutDialog.currentLayoutName==null)  this.noPosition_cose()
+            if(globalCache.currentLayoutName==null)  this.noPosition_cose()
         }
     }else if(msgPayload.message=="addNewTwin") {
         this.drawTwins([msgPayload.twinInfo],"animation")
+    }else if(msgPayload.message=="addNewTwins") {
+        this.drawTwins(msgPayload.twinsInfo,"animation")
     }else if(msgPayload.message=="drawTwinsAndRelations") this.drawTwinsAndRelations(msgPayload.info)
-    else if(msgPayload.message=="selectNodes"){
+    else if(msgPayload.message=="showInfoSelectedNodes"){ //from selecting twins in the twintree
         this.core.nodes().unselect()
         this.core.edges().unselect()
         var arr=msgPayload.info;
         var mouseClickDetail=msgPayload.mouseClickDetail;
         arr.forEach(element => {
-            var aTwin= this.core.nodes("#"+element['$dtId'])
+            var aTwin= this.core.nodes("#"+element['displayName'])
             aTwin.select()
             if(mouseClickDetail!=2) this.animateANode(aTwin) //ignore double click second click
         });
@@ -460,9 +532,13 @@ topologyDOM.prototype.rxMessage=function(msgPayload){
             this.core.center(topoNode)
         }
     }else if(msgPayload.message=="visualDefinitionChange"){
-        if(msgPayload.srcModelID) this.updateRelationshipColor(msgPayload.srcModelID,msgPayload.relationshipName,msgPayload.color)
+        if(msgPayload.srcModelID){
+            if(msgPayload.color) this.updateRelationshipColor(msgPayload.srcModelID,msgPayload.relationshipName,msgPayload.color)
+            else if(msgPayload.shape) this.updateRelationshipShape(msgPayload.srcModelID,msgPayload.relationshipName,msgPayload.shape)
+        } 
         else{
             if(msgPayload.color) this.updateModelTwinColor(msgPayload.modelID,msgPayload.color)
+            else if(msgPayload.shape) this.updateModelTwinShape(msgPayload.modelID,msgPayload.shape)
             else if(msgPayload.avarta) this.updateModelAvarta(msgPayload.modelID,msgPayload.avarta)
             else if(msgPayload.noAvarta)  this.updateModelAvarta(msgPayload.modelID,null)
         } 
@@ -474,14 +550,14 @@ topologyDOM.prototype.rxMessage=function(msgPayload){
     else if(msgPayload.message=="addSelectInbound"){ this.selectInboundNodes()   }
     else if(msgPayload.message=="hideSelectedNodes"){ this.hideSelectedNodes()   }
     else if(msgPayload.message=="COSESelectedNodes"){ this.COSESelectedNodes()   }
-    else if(msgPayload.message=="saveLayout"){ this.saveLayout(msgPayload.layoutName,msgPayload.adtName)   }
+    else if(msgPayload.message=="saveLayout"){ this.saveLayout(msgPayload.layoutName)   }
     else if(msgPayload.message=="layoutChange"){ this.applyNewLayout()   }
 }
 
 topologyDOM.prototype.applyNewLayout = function () {
-    var layoutName=editLayoutDialog.currentLayoutName
+    var layoutName=globalCache.currentLayoutName
     
-    var layoutDetail= editLayoutDialog.layoutJSON[layoutName]
+    var layoutDetail= globalCache.layoutJSON[layoutName]
     
     //remove all bending edge 
     this.core.edges().forEach(oneEdge=>{
@@ -521,7 +597,8 @@ topologyDOM.prototype.applyNewLayout = function () {
 
 topologyDOM.prototype.applyEdgeBendcontrolPoints = function (srcID,relationshipID
     ,cyedgebendeditingWeights,cyedgebendeditingDistances,cyedgecontroleditingWeights,cyedgecontroleditingDistances) {
-        var theNode=this.core.filter('[id = "'+srcID+'"]');
+        var nodeName=globalCache.twinIDMapToDisplayName[srcID]
+        var theNode=this.core.filter('[id = "'+nodeName+'"]');
         var edges=theNode.connectedEdges().toArray()
         for(var i=0;i<edges.length;i++){
             var anEdge=edges[i]
@@ -544,10 +621,10 @@ topologyDOM.prototype.applyEdgeBendcontrolPoints = function (srcID,relationshipI
 
 
 
-topologyDOM.prototype.saveLayout = function (layoutName,adtName) {
-    var layoutDict=editLayoutDialog.layoutJSON[layoutName]
+topologyDOM.prototype.saveLayout = async function (layoutName) {
+    var layoutDict=globalCache.layoutJSON[layoutName]
     if(!layoutDict){
-        layoutDict=editLayoutDialog.layoutJSON[layoutName]={}
+        layoutDict=globalCache.layoutJSON[layoutName]={}
     }
     
     if(this.core.nodes().size()==0) return;
@@ -583,8 +660,15 @@ topologyDOM.prototype.saveLayout = function (layoutName,adtName) {
         }
     })
 
-    $.post("layout/saveLayouts",{"adtName":adtName,"layouts":JSON.stringify(editLayoutDialog.layoutJSON)})
-    this.broadcastMessage({ "message": "layoutsUpdated"})
+    var saveLayoutObj={"layouts":{}}
+    saveLayoutObj["layouts"][layoutName]=JSON.stringify(layoutDict)
+    try{
+        await msalHelper.callAPI("digitaltwin/saveLayout", "POST", saveLayoutObj)
+        this.broadcastMessage({ "message": "layoutsUpdated","layoutName":layoutName})
+    }catch(e){
+        console.log(e)
+        if(e.responseText) alert(e.responseText)
+    }
 }
 
 topologyDOM.prototype.numberPrecision = function (number) {
@@ -644,8 +728,29 @@ topologyDOM.prototype.addConnections = function (targetNode) {
 }
 
 topologyDOM.prototype.showConnectionDialog = function (preparationInfo) {
-    var confirmDialogDiv =  $('<div title="Add connections"></div>')
+    var confirmDialogDiv = new simpleConfirmDialog()
     var resultActions=[]
+    confirmDialogDiv.show(
+        { width: "450px" },
+        {
+            title: "Add connections"
+            , content: ""
+            , buttons: [
+                {
+                    colorClass: "w3-red w3-hover-pink", text: "Confirm", "clickFunc": () => {
+                        confirmDialogDiv.close();
+                        this.createConnections(resultActions)
+                    }
+                },
+                {
+                    colorClass: "w3-gray", text: "Cancel", "clickFunc": () => {
+                        confirmDialogDiv.close()
+                    }
+                }
+            ]
+        }
+    )
+    confirmDialogDiv.dialogDiv.empty()
     preparationInfo.forEach((oneRow,index)=>{
         var fromNode=oneRow.from
         var toNode=oneRow.to
@@ -661,62 +766,49 @@ topologyDOM.prototype.showConnectionDialog = function (preparationInfo) {
             connectionTypes.forEach(oneType=>{
                 switchTypeSelector.addOption(oneType)
             })
-            resultActions.push({from:fromNode.id(),to:toNode.id(),connect:connectionTypes[0]})
+            resultActions.push({from:fromNode.data().originalInfo["$dtId"] ,to:toNode.data().originalInfo["$dtId"],connect:connectionTypes[0]})
             switchTypeSelector.callBack_clickOption=(optionText,optionValue)=>{
                 resultActions[index][2]=optionText
                 switchTypeSelector.changeName(optionText)
             }
             switchTypeSelector.triggerOptionIndex(0)
         }else if(connectionTypes.length==1){
-            resultActions.push({from:fromNode.id(),to:toNode.id(),connect:connectionTypes[0]})
+            resultActions.push({from:fromNode.data().originalInfo["$dtId"] ,to:toNode.data().originalInfo["$dtId"],connect:connectionTypes[0]})
             label.css("color","green")
             label.html("Add <b>"+connectionTypes[0]+"</b> connection from <b>"+fromNode.id()+"</b> to <b>"+toNode.id()+"</b>") 
         }
-        confirmDialogDiv.append(label)
+        confirmDialogDiv.dialogDiv.append(label)
     })
-
-    $('body').append(confirmDialogDiv)
-    confirmDialogDiv.dialog({
-        width:450
-        ,height:300
-        ,resizable:false
-        ,buttons: [
-            {
-                text: "Confirm",
-                click: () => {
-                    this.createConnections(resultActions)
-                    confirmDialogDiv.dialog("destroy")
-                }
-            },
-            {
-                text: "Cancel",
-                click: () => { confirmDialogDiv.dialog("destroy") }
-            }
-        ]
-    });
 }
 
-topologyDOM.prototype.createConnections = function (resultActions) {
+topologyDOM.prototype.createConnections = async function (resultActions) {
     // for each resultActions, calculate the appendix index, to avoid same ID is used for existed connections
-    resultActions.forEach(oneAction=>{
-        var maxExistedConnectionNumber=0
-        var existedRelations=adtInstanceSelectionDialog.storedOutboundRelationships[oneAction.from]
-        if(existedRelations==null) existedRelations=[]
-        existedRelations.forEach(oneRelation=>{
-            var oneRelationID=oneRelation['$relationshipId']
-            if(oneRelation["$targetId"]!=oneAction.to) return
-            var lastIndex= oneRelationID.split(";").pop()
-            lastIndex=parseInt(lastIndex)
-            if(maxExistedConnectionNumber<=lastIndex) maxExistedConnectionNumber=lastIndex+1
-        })
-        oneAction.IDindex=maxExistedConnectionNumber
-    })
+    function uuidv4() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
 
-    $.post("editADT/createRelations",{actions:resultActions}, (data, status) => {
-        if(data=="") return;
-        adtInstanceSelectionDialog.storeTwinRelationships_append(data)
-        this.drawRelations(data)
+    var finalActions=[]
+    resultActions.forEach(oneAction=>{
+        var oneFinalAction={}
+        oneFinalAction["$srcId"]=oneAction["from"]
+        oneFinalAction["$relationshipId"]=uuidv4();
+        oneFinalAction["obj"]={
+            "$targetId": oneAction["to"],
+            "$relationshipName": oneAction["connect"]
+        }
+        finalActions.push(oneFinalAction)
     })
+    try{
+        var data = await msalHelper.callAPI("digitaltwin/createRelations", "POST",  {actions:JSON.stringify(finalActions)})
+    }catch(e){
+        console.log(e)
+        if(e.responseText) alert(e.responseText)
+    }
+    globalCache.storeTwinRelationships_append(data)
+    this.drawRelations(data)
 }
 
 

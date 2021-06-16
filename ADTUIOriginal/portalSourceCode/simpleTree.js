@@ -1,9 +1,9 @@
 'use strict';
-
-function simpleTree(DOM){
+function simpleTree(DOM,options){
     this.DOM=DOM
     this.groupNodes=[] //each group header is one node
     this.selectedNodes=[];
+    this.options=options || {}
 }
 
 simpleTree.prototype.scrollToLeafNode=function(aNode){
@@ -163,7 +163,7 @@ simpleTree.prototype.insertGroupNode=function(obj,index){
 simpleTree.prototype.addGroupNode=function(obj){
     var aNewGroupNode = new simpleTreeGroupNode(this,obj)
     var existGroupNode= this.findGroupNode(aNewGroupNode.name)
-    if(existGroupNode!=null) return;
+    if(existGroupNode!=null) return existGroupNode;
     this.groupNodes.push(aNewGroupNode);
     this.DOM.append(aNewGroupNode.headerDOM)
     this.DOM.append(aNewGroupNode.listDOM)
@@ -174,6 +174,10 @@ simpleTree.prototype.selectLeafNode=function(leafNode,mouseClickDetail){
     this.selectLeafNodeArr([leafNode],mouseClickDetail)
 }
 simpleTree.prototype.appendLeafNodeToSelection=function(leafNode){
+    if(this.options.noMultipleSelectAllowed){
+        this.selectLeafNode(leafNode)
+        return;
+    } 
     var newArr=[].concat(this.selectedNodes)
     newArr.push(leafNode)
     this.selectLeafNodeArr(newArr)
@@ -200,6 +204,10 @@ simpleTree.prototype.dblClickNode=function(theNode){
     if(this.callback_afterDblclickNode) this.callback_afterDblclickNode(theNode)
 }
 
+simpleTree.prototype.sortAllLeaves=function(){
+    this.groupNodes.forEach(oneGroupNode=>{oneGroupNode.sortNodesByName()})
+}
+
 //----------------------------------tree group node---------------
 function simpleTreeGroupNode(parentTree,obj){
     this.parentTree=parentTree
@@ -209,10 +217,36 @@ function simpleTreeGroupNode(parentTree,obj){
     this.createDOM()
 }
 
-simpleTreeGroupNode.prototype.refreshName=function(){
-    this.headerDOM.text(this.name+"("+this.childLeafNodes.length+")")
-    if(this.childLeafNodes.length>0) this.headerDOM.css("font-weight","bold")
-    else this.headerDOM.css("font-weight","normal")
+simpleTreeGroupNode.prototype.refreshName=function(){ //⬢▉⚫
+    this.headerDOM.empty()
+    var nameDiv=$("<div style='display:inline;padding-right:3px;vertical-align:middle'></div>")
+    nameDiv.text(this.name)
+    
+    if(this.childLeafNodes.length>0) lblColor="yellowgreen"
+    else var lblColor="gray" 
+    this.headerDOM.css("font-weight","bold")
+
+    if(this.parentTree.options.groupNodeIconFunc){
+        var iconLabel=this.parentTree.options.groupNodeIconFunc(this)
+        this.headerDOM.append(iconLabel)
+    }
+    
+    var numberlabel=$("<label style='display:inline;background-color:"+lblColor
+        +";color:white;font-size:9px;padding:2px 4px;font-weight:normal;border-radius: 2px;'>"+this.childLeafNodes.length+"</label>")
+    this.headerDOM.append(nameDiv,numberlabel) 
+    
+    this.checkOptionHideEmptyGroup()
+}
+
+simpleTreeGroupNode.prototype.checkOptionHideEmptyGroup=function(){
+    if (this.parentTree.options.hideEmptyGroup && this.childLeafNodes.length == 0) {
+        this.shrink()
+        this.headerDOM.hide()
+        if (this.listDOM) this.listDOM.hide()
+    } else {
+        this.headerDOM.show()
+        if (this.listDOM) this.listDOM.show()
+    }
 
 }
 
@@ -244,19 +278,35 @@ simpleTreeGroupNode.prototype.isOpen=function(){
 
 
 simpleTreeGroupNode.prototype.expand=function(){
-    this.listDOM.addClass("w3-show")
+    if(this.listDOM) this.listDOM.addClass("w3-show")
 }
 
 simpleTreeGroupNode.prototype.shrink=function(){
-    this.listDOM.removeClass("w3-show")
+    if(this.listDOM) this.listDOM.removeClass("w3-show")
 }
 
+simpleTreeGroupNode.prototype.sortNodesByName=function(){
+    var treeOptions=this.parentTree.options
+    if(treeOptions.leafNameProperty) var leafNameProperty=treeOptions.leafNameProperty
+    else leafNameProperty="$dtId"
+    this.childLeafNodes.sort(function (a, b) { 
+        var aName=a.name.toLowerCase()
+        var bName=b.name.toLowerCase()
+        return aName.localeCompare(bName) 
+    });
+    //this.listDOM.empty() //NOTE: Can not delete those leaf node otherwise the event handle is lost
+    this.childLeafNodes.forEach(oneLeaf=>{this.listDOM.append(oneLeaf.DOM)})
+}
 
 simpleTreeGroupNode.prototype.addNode=function(obj,skipRepeat){
+    var treeOptions=this.parentTree.options
+    if(treeOptions.leafNameProperty) var leafNameProperty=treeOptions.leafNameProperty
+    else leafNameProperty="$dtId"
+
     if(skipRepeat){
         var foundRepeat=false;
         this.childLeafNodes.forEach(aNode=>{
-            if(aNode.name==obj["$dtId"]) {
+            if(aNode.name==obj[leafNameProperty]) {
                 foundRepeat=true
                 return;
             }
@@ -274,7 +324,11 @@ simpleTreeGroupNode.prototype.addNode=function(obj,skipRepeat){
 function simpleTreeLeafNode(parentGroupNode,obj){
     this.parentGroupNode=parentGroupNode
     this.leafInfo=obj;
-    this.name=this.leafInfo["$dtId"]
+
+    var treeOptions=this.parentGroupNode.parentTree.options
+    if(treeOptions.leafNameProperty) this.name=this.leafInfo[treeOptions.leafNameProperty]
+    else this.name=this.leafInfo["$dtId"]
+
     this.createLeafNodeDOM()
 }
 
@@ -287,7 +341,8 @@ simpleTreeLeafNode.prototype.deleteSelf = function () {
 }
 
 simpleTreeLeafNode.prototype.createLeafNodeDOM=function(){
-    this.DOM=$('<button class="w3-button w3-white" style="display:block;text-align:left;width:98%">'+this.name+'</button>')
+    this.DOM=$('<button class="w3-button w3-white" style="display:block;text-align:left;width:98%"></button>')
+    this.redrawLabel()
     var clickF=(e)=>{
         this.highlight();
         var clickDetail=e.detail
@@ -303,6 +358,20 @@ simpleTreeLeafNode.prototype.createLeafNodeDOM=function(){
         this.parentGroupNode.parentTree.dblClickNode(this)
     })
 }
+
+simpleTreeLeafNode.prototype.redrawLabel=function(){
+    this.DOM.empty()
+    if(this.parentGroupNode.parentTree.options.leafNodeIconFunc){
+        var iconLabel=this.parentGroupNode.parentTree.options.leafNodeIconFunc(this)
+        this.DOM.append(iconLabel)
+    }
+
+    var nameDiv=$("<div style='display:inline;padding-right:3px;vertical-align:middle'></div>")
+    nameDiv.text(this.name)
+    this.DOM.append(nameDiv)
+}
+
+
 simpleTreeLeafNode.prototype.highlight=function(){
     this.DOM.addClass("w3-orange")
     this.DOM.addClass("w3-hover-amber")

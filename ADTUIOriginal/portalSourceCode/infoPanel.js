@@ -1,6 +1,7 @@
-const adtInstanceSelectionDialog = require("./adtInstanceSelectionDialog");
 const modelAnalyzer = require("./modelAnalyzer");
 const simpleSelectMenu= require("./simpleSelectMenu")
+const simpleConfirmDialog = require("./simpleConfirmDialog")
+const globalCache = require("./globalCache")
 
 function infoPanel() {
     this.continerDOM=$('<div class="w3-card" style="position:absolute;z-index:90;right:0px;top:50%;height:70%;width:300px;transform: translateY(-50%);"></div>')
@@ -39,7 +40,9 @@ function infoPanel() {
     });
     this.continerDOM.append(this.DOM)
     $('body').append(this.continerDOM)
-    this.DOM.html("<a style='display:block;font-style:italic;color:gray'>Choose twins or relationships to view infomration</a><a style='display:block;font-style:italic;color:gray;padding-top:20px'>Press shift key to select multiple in topology view</a><a style='display:block;font-style:italic;color:gray;padding-top:20px'>Press ctrl key to select multiple in tree view</a>")
+    this.DOM.html("<a style='display:block;font-style:italic;color:gray'>Choose twins or relationships to view infomration</a><a style='display:block;font-style:italic;color:gray;padding-top:20px'>Press shift key to select multiple in topology view</a><a style='display:block;font-style:italic;color:gray;padding-top:20px;padding-bottom:20px'>Press ctrl key to select multiple in tree view</a><a style='display:block;font-style:italic;color:gray;padding-top:20px;padding-bottom:5px'>Import twins data by clicking button below</a>")
+
+    this.drawButtons(null)
 
     this.selectedObjects=null;
 }
@@ -50,9 +53,16 @@ infoPanel.prototype.rxMessage=function(msgPayload){
             this.continerDOM.show()
             this.continerDOM.addClass("w3-animate-right")
         }
-    }else if(msgPayload.message=="selectNodes"){
+    }else if(msgPayload.message=="showInfoSelectedNodes"){
         this.DOM.empty()
         var arr=msgPayload.info;
+
+        if(arr==null || arr.length==0){
+            this.drawButtons(null)
+            this.selectedObjects=[];
+            return;
+        }
+
         this.selectedObjects=arr;
         if(arr.length==1){
             var singleElementInfo=arr[0];
@@ -84,9 +94,10 @@ infoPanel.prototype.rxMessage=function(msgPayload){
             this.drawButtons("multiple")
             this.drawMultipleObj()
         }
-    }else if(msgPayload.message=="selectGroupNode"){
+    }else if(msgPayload.message=="showInfoGroupNode"){
         this.DOM.empty()
         var modelID = msgPayload.info["@id"]
+        globalCache.showingCreateTwinModelID=modelID
         if(!modelAnalyzer.DTDLModels[modelID]) return;
         var twinJson = {
             "$metadata": {
@@ -118,7 +129,7 @@ infoPanel.prototype.rxMessage=function(msgPayload){
                         if(IDInput) IDInput.val("")
                         $.post("queryADT/oneTwinInfo",{twinID:twinJson["$dtId"]}, (data)=> {
                             if(data=="") return;
-                            adtInstanceSelectionDialog.storedTwins[data["$dtId"]] = data;
+                            globalCache.storedTwins[data["$dtId"]] = data;
                             this.broadcastMessage({ "message": "addNewTwin",twinInfo:data})
                         })                        
                     }
@@ -143,16 +154,36 @@ infoPanel.prototype.getRelationShipEditableProperties=function(relationshipName,
 }
 
 infoPanel.prototype.drawButtons=function(selectType){
-    var refreshBtn=$('<button class="w3-bar-item w3-button w3-black"><i class="fa fa-refresh"></i></button>')
-    refreshBtn.on("click",()=>{this.refreshInfomation()})
-    this.DOM.append(refreshBtn)
+    var impBtn=$('<button class="w3-bar-item w3-button w3-blue"><i class="fa fa-arrow-circle-o-down"></i></button>')
+    var actualImportTwinsBtn =$('<input type="file" name="modelFiles" multiple="multiple" style="display:none"></input>')
+    if(selectType!=null){
+        var refreshBtn=$('<button class="w3-bar-item w3-button w3-black"><i class="fa fa-refresh"></i></button>')
+        var expBtn=$('<button class="w3-bar-item w3-button w3-green"><i class="fa fa-arrow-circle-o-up"></i></button>')    
+        this.DOM.append(refreshBtn,expBtn,impBtn,actualImportTwinsBtn)
+        refreshBtn.on("click",()=>{this.refreshInfomation()})
+        expBtn.on("click",()=>{
+            //find out the twins in selection and their connections (filter both src and target within the selected twins)
+            //and export them
+            this.exportSelected()
+        })    
+    }else{
+        this.DOM.append(impBtn,actualImportTwinsBtn)
+    }
+    
+    impBtn.on("click",()=>{actualImportTwinsBtn.trigger('click');})
+    actualImportTwinsBtn.change(async (evt)=>{
+        var files = evt.target.files; // FileList object
+        await this.readTwinsFilesContentAndImport(files)
+        actualImportTwinsBtn.val("")
+    })
+    if(selectType==null) return;
 
     if(selectType=="singleRelationship"){
-        var delBtn =  $('<button style="width:80%" class="w3-button w3-red w3-hover-pink w3-border">Delete All</button>')
+        var delBtn =  $('<button style="width:50%" class="w3-button w3-red w3-hover-pink w3-border">Delete All</button>')
         this.DOM.append(delBtn)
         delBtn.on("click",()=>{this.deleteSelected()})
     }else if(selectType=="singleNode" || selectType=="multiple"){
-        var delBtn = $('<button style="width:80%" class="w3-button w3-red w3-hover-pink w3-border">Delete All</button>')
+        var delBtn = $('<button style="width:50%" class="w3-button w3-red w3-hover-pink w3-border">Delete All</button>')
         var connectToBtn =$('<button style="width:45%"  class="w3-button w3-border">Connect to</button>')
         var connectFromBtn = $('<button style="width:45%" class="w3-button w3-border">Connect from</button>')
         var showInboundBtn = $('<button  style="width:45%" class="w3-button w3-border">Query Inbound</button>')
@@ -187,6 +218,153 @@ infoPanel.prototype.drawButtons=function(selectType){
     }
 }
 
+infoPanel.prototype.exportSelected=async function(){
+    var arr=this.selectedObjects;
+    if(arr.length==0) return;
+    var twinIDArr=[]
+    var twinToBeStored=[]
+    var twinIDs={}
+    arr.forEach(element => {
+        if (element['$sourceId']) return
+        twinIDArr.push(element['$dtId'])
+        var anExpTwin={}
+        anExpTwin["$metadata"]={"$model":element["$metadata"]["$model"]}
+        for(var ind in element){
+            if(ind=="$metadata" || ind=="$etag") continue 
+            else anExpTwin[ind]=element[ind]
+        }
+        twinToBeStored.push(anExpTwin)
+        twinIDs[element['$dtId']]=1
+    });
+    var relationsToBeStored=[]
+    twinIDArr.forEach(oneID=>{
+        var relations=globalCache.storedOutboundRelationships[oneID]
+        if(!relations) return;
+        relations.forEach(oneRelation=>{
+            var targetID=oneRelation["$targetId"]
+            if(twinIDs[targetID]) {
+                var obj={}
+                for(var ind in oneRelation){
+                    if(ind =="$etag"||ind =="$relationshipId"||ind =="$sourceId"||ind =="sourceModel") continue
+                    obj[ind]=oneRelation[ind]
+                }
+                var oneAction={"$srcId":oneID,
+                                "$relationshipId":oneRelation["$relationshipId"],
+                                "obj":obj}
+                relationsToBeStored.push(oneAction)
+            }
+        })
+    })
+    var finalJSON={"twins":twinToBeStored,"relations":relationsToBeStored}
+    var pom = $("<a></a>")
+    pom.attr('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(JSON.stringify(finalJSON)));
+    pom.attr('download', "exportTwinsData.json");
+    pom[0].click()
+}
+
+infoPanel.prototype.readOneFile= async function(aFile){
+    return new Promise((resolve, reject) => {
+        try{
+            var reader = new FileReader();
+            reader.onload = ()=> {
+                resolve(reader.result)
+            };
+            reader.readAsText(aFile);
+        }catch(e){
+            reject(e)
+        }
+    })
+}
+infoPanel.prototype.readTwinsFilesContentAndImport=async function(files){
+    var importTwins=[]
+    var importRelations=[]
+    for (var i = 0, f; f = files[i]; i++) {
+        // Only process json files.
+        if (f.type!="application/json") continue;
+        try{
+            var str= await this.readOneFile(f)
+            var obj=JSON.parse(str)
+            if(obj.twins) importTwins=importTwins.concat(obj.twins)
+            if(obj.relations) importRelations=importRelations.concat(obj.relations)
+        }catch(err){
+            alert(err)
+        }
+    }
+
+    //for ADT UI standalone tool, translate all twin ID by its displayName
+    var IDtoName={}
+    importTwins.forEach(oneTwin=>{
+        var displayName=oneTwin["displayName"] || oneTwin["$dtId"]
+        IDtoName[oneTwin["$dtId"]]=displayName
+        oneTwin["$dtId"]=displayName
+        delete oneTwin["displayName"]
+    })
+    importRelations.forEach(oneRelation=>{
+        oneRelation["$srcId"]=IDtoName[oneRelation["$srcId"]]
+        oneRelation["obj"]["$targetId"]=IDtoName[oneRelation["obj"]["$targetId"]]
+    })
+
+
+    var twinsImportResult= await this.batchImportTwins(importTwins)
+    twinsImportResult.forEach(data=>{
+        globalCache.storedTwins[data["$dtId"]] = data;
+    })
+    this.broadcastMessage({ "message": "addNewTwins",twinsInfo:twinsImportResult})
+
+    var relationsImportResult=await this.batchImportRelations(importRelations)
+    globalCache.storeTwinRelationships_append(relationsImportResult)
+    this.broadcastMessage({ "message": "drawAllRelations",info:relationsImportResult})
+
+    var numOfTwins=twinsImportResult.length
+    var numOfRelations=relationsImportResult.length
+    var str="Add "+numOfTwins+ " node"+((numOfTwins<=1)?"":"s")+", "+numOfRelations+" relationship"+((numOfRelations<=1)?"":"s")
+    str+=`. (Raw twin records:${importTwins.length}); Raw relations records:${importRelations.length})`
+    var confirmDialogDiv = new simpleConfirmDialog()
+    confirmDialogDiv.show(
+        { width: "400px" },
+        {
+            title: "Import Result"
+            , content:str
+            , buttons: [
+                {
+                    colorClass: "w3-gray", text: "Ok", "clickFunc": () => {
+                        confirmDialogDiv.close()
+                    }
+                }
+            ]
+        }
+    )
+}
+
+infoPanel.prototype.batchImportTwins=async function(twins){
+    return new Promise((resolve, reject) => {
+        if(twins.length==0) resolve([])
+        try{
+            $.post("editADT/batchImportTwins",{"twins":JSON.stringify(twins)}, (data)=> {
+                if (data == "") data=[]
+                resolve(data)
+            });
+        }catch(e){
+            reject(e)
+        }
+    })
+}
+
+infoPanel.prototype.batchImportRelations=async function(relations){
+    return new Promise((resolve, reject) => {
+        if(relations.length==0) resolve([])
+        try{
+            $.post("editADT/createRelations",{"actions":JSON.stringify(relations)}, (data)=> {
+                if (data == "") data=[]
+                resolve(data)
+            });
+        }catch(e){
+            reject(e)
+        }
+    })
+}
+
+
 infoPanel.prototype.refreshInfomation=async function(){
     var arr=this.selectedObjects;
     var queryArr=[]
@@ -201,8 +379,8 @@ infoPanel.prototype.refreshInfomation=async function(){
             if(oneRe["$relationshipId"]){//update storedOutboundRelationships
                 var srcID= oneRe['$sourceId']
                 var relationshipId= oneRe['$relationshipId']
-                if(adtInstanceSelectionDialog.storedOutboundRelationships[srcID]!=null){
-                    var relations=adtInstanceSelectionDialog.storedOutboundRelationships[srcID]
+                if(globalCache.storedOutboundRelationships[srcID]!=null){
+                    var relations=globalCache.storedOutboundRelationships[srcID]
                     relations.forEach(oneStoredRelation=>{
                         if(oneStoredRelation['$relationshipId']==relationshipId){
                             //update all content
@@ -212,14 +390,14 @@ infoPanel.prototype.refreshInfomation=async function(){
                 }
             }else{//update storedTwins
                 var twinID= oneRe['$dtId']
-                if(adtInstanceSelectionDialog.storedTwins[twinID]!=null){
-                    for(var ind in oneRe){ adtInstanceSelectionDialog.storedTwins[twinID][ind]=oneRe[ind] }
+                if(globalCache.storedTwins[twinID]!=null){
+                    for(var ind in oneRe){ globalCache.storedTwins[twinID][ind]=oneRe[ind] }
                 }
             }
         })
         
         //redraw infopanel if needed
-        if(this.selectedObjects.length==1) this.rxMessage({ "message": "selectNodes", info: this.selectedObjects })
+        if(this.selectedObjects.length==1) this.rxMessage({ "message": "showInfoSelectedNodes", info: this.selectedObjects })
     });
 }
 
@@ -244,7 +422,8 @@ infoPanel.prototype.deleteSelected=async function(){
             relationsArr.splice(i,1)
         }
     }
-    var confirmDialogDiv=$("<div/>")
+
+    var confirmDialogDiv = new simpleConfirmDialog()
     var dialogStr=""
     var twinNumber=twinIDArr.length;
     var relationsNumber = relationsArr.length;
@@ -252,27 +431,29 @@ infoPanel.prototype.deleteSelected=async function(){
     if(twinNumber>0 && relationsNumber>0) dialogStr+=" and additional "
     if(relationsNumber>0) dialogStr +=  relationsNumber+" relation"+((relationsNumber>1)?"s":"" )
     dialogStr+=" will be deleted. Please confirm"
-    confirmDialogDiv.text(dialogStr)
-    $('body').append(confirmDialogDiv)
-    confirmDialogDiv.dialog({
-        buttons: [
-          {
-            text: "Confirm",
-            click: ()=> {
-                if(twinIDArr.length>0) this.deleteTwins(twinIDArr)
-                if(relationsArr.length>0) this.deleteRelations(relationsArr)
-                confirmDialogDiv.dialog( "destroy" );
-                this.DOM.empty()
-            }
-          },
-          {
-            text: "Cancel",
-            click: ()=> {
-                confirmDialogDiv.dialog( "destroy" );
-            }
-          }
-        ]
-      }); 
+    confirmDialogDiv.show(
+        { width: "350px" },
+        {
+            title: "Confirm"
+            , content:dialogStr
+            , buttons: [
+                {
+                    colorClass: "w3-red w3-hover-pink", text: "Confirm", "clickFunc": () => {
+                        if (twinIDArr.length > 0) this.deleteTwins(twinIDArr)
+                        if (relationsArr.length > 0) this.deleteRelations(relationsArr)
+                        confirmDialogDiv.close()
+                        this.DOM.empty()
+                        this.drawButtons(null)
+                    }
+                },
+                {
+                    colorClass: "w3-gray", text: "Cancel", "clickFunc": () => {
+                        confirmDialogDiv.close()
+                    }
+                }
+            ]
+        }
+    )
 }
 
 infoPanel.prototype.deleteTwins=async function(twinIDArr){   
@@ -281,8 +462,8 @@ infoPanel.prototype.deleteTwins=async function(twinIDArr){
         var result=await this.deletePartialTwins(smallArr)
 
         result.forEach((oneID)=>{
-            delete adtInstanceSelectionDialog.storedTwins[oneID]
-            delete adtInstanceSelectionDialog.storedOutboundRelationships[oneID]
+            delete globalCache.storedTwins[oneID]
+            delete globalCache.storedOutboundRelationships[oneID]
         });
 
         this.broadcastMessage({ "message": "twinsDeleted",twinIDArr:result})
@@ -310,7 +491,7 @@ infoPanel.prototype.deleteRelations=async function(relationsArr){
     })
     $.post("editADT/deleteRelations",{"relations":arr},  (data)=> { 
         if(data=="") data=[];
-        adtInstanceSelectionDialog.storeTwinRelationships_remove(data)
+        globalCache.storeTwinRelationships_remove(data)
         this.broadcastMessage({ "message": "relationsDeleted","relations":data})
     });
     
@@ -329,12 +510,12 @@ infoPanel.prototype.showOutBound=async function(){
         var data=await this.fetchPartialOutbounds(smallArr)
         if(data=="") continue;
         //new twin's relationship should be stored as well
-        adtInstanceSelectionDialog.storeTwinRelationships(data.newTwinRelations)
+        globalCache.storeTwinRelationships(data.newTwinRelations)
         
         data.childTwinsAndRelations.forEach(oneSet=>{
             for(var ind in oneSet.childTwins){
                 var oneTwin=oneSet.childTwins[ind]
-                adtInstanceSelectionDialog.storedTwins[ind]=oneTwin
+                globalCache.storedTwins[ind]=oneTwin
             }
         })
         this.broadcastMessage({ "message": "drawTwinsAndRelations",info:data})
@@ -356,15 +537,15 @@ infoPanel.prototype.showInBound=async function(){
         var data=await this.fetchPartialInbounds(smallArr)
         if(data=="") continue;
         //new twin's relationship should be stored as well
-        adtInstanceSelectionDialog.storeTwinRelationships(data.newTwinRelations)
+        globalCache.storeTwinRelationships(data.newTwinRelations)
         
         //data.newTwinRelations.forEach(oneRelation=>{console.log(oneRelation['$sourceId']+"->"+oneRelation['$targetId'])})
-        //console.log(adtInstanceSelectionDialog.storedOutboundRelationships["default"])
+        //console.log(globalCache.storedOutboundRelationships["default"])
 
         data.childTwinsAndRelations.forEach(oneSet=>{
             for(var ind in oneSet.childTwins){
                 var oneTwin=oneSet.childTwins[ind]
-                adtInstanceSelectionDialog.storedTwins[ind]=oneTwin
+                globalCache.storedTwins[ind]=oneTwin
             }
         })
         this.broadcastMessage({ "message": "drawTwinsAndRelations",info:data})
@@ -378,11 +559,11 @@ infoPanel.prototype.fetchPartialOutbounds= async function(IDArr){
             var knownTargetTwins={}
             IDArr.forEach(oneID=>{
                 knownTargetTwins[oneID]=1 //itself also is known
-                var outBoundRelation=adtInstanceSelectionDialog.storedOutboundRelationships[oneID]
+                var outBoundRelation=globalCache.storedOutboundRelationships[oneID]
                 if(outBoundRelation){
                     outBoundRelation.forEach(oneRelation=>{
                         var targetID=oneRelation["$targetId"]
-                        if(adtInstanceSelectionDialog.storedTwins[targetID]!=null) knownTargetTwins[targetID]=1
+                        if(globalCache.storedTwins[targetID]!=null) knownTargetTwins[targetID]=1
                     })
                 }
             })
@@ -406,13 +587,13 @@ infoPanel.prototype.fetchPartialInbounds= async function(IDArr){
                 IDDict[oneID]=1
                 knownSourceTwins[oneID]=1 //itself also is known
             })
-            for(var twinID in adtInstanceSelectionDialog.storedOutboundRelationships){
-                var relations=adtInstanceSelectionDialog.storedOutboundRelationships[twinID]
+            for(var twinID in globalCache.storedOutboundRelationships){
+                var relations=globalCache.storedOutboundRelationships[twinID]
                 relations.forEach(oneRelation=>{
                     var targetID=oneRelation['$targetId']
                     var srcID=oneRelation['$sourceId']
                     if(IDDict[targetID]!=null){
-                        if(adtInstanceSelectionDialog.storedTwins[srcID]!=null) knownSourceTwins[srcID]=1
+                        if(globalCache.storedTwins[srcID]!=null) knownSourceTwins[srcID]=1
                     }
                 })
             }
@@ -508,9 +689,9 @@ infoPanel.prototype.drawDropdownOption=function(contentDOM,newPath,valueArr,isNe
         var str =oneOption["displayName"]  || oneOption["enumValue"] 
         aSelectMenu.addOption(str)
     })
-    aSelectMenu.callBack_clickOption=(optionText,optionValue)=>{
+    aSelectMenu.callBack_clickOption=(optionText,optionValue,realMouseClick)=>{
         aSelectMenu.changeName(optionText)
-        this.editDTProperty(originElementInfo,aSelectMenu.DOM.data("path"),optionValue,"string",isNewTwin)
+        if(realMouseClick) this.editDTProperty(originElementInfo,aSelectMenu.DOM.data("path"),optionValue,"string",isNewTwin)
     }
     var val=this.searchValue(originElementInfo,newPath)
     if(val!=null){
