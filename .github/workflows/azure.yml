@@ -27,6 +27,7 @@ env:
   AZURE_WEBAPP_NAME: adtrocks    # set this to your application's name
   AZURE_WEBAPP_PACKAGE_PATH: '.'      # set this to the path to your web app project, defaults to the repository root
   NODE_VERSION: '10.x'                # set this to the node version to use  
+  working-directory: ./ADTUI/ADTUIOriginal
 
 jobs:
   build-and-deploy:
@@ -43,11 +44,13 @@ jobs:
       run: |
         # Build and test the project, then
         # deploy to Azure Web App.
-        npm install --path './ADTUIOriginal'
-        npm run build --if-present --path './ADTUIOriginal/package.json'     
+        npm install 
+        npm run build --if-present 
+      working-directory: ${{env.working-directory}}
     - name: 'Deploy to Azure WebApp'
       uses: azure/webapps-deploy@v2
       with:
         app-name: ${{ env.AZURE_WEBAPP_NAME }}
         publish-profile: ${{ secrets.WEBAPP_ADT_ROCKS }}
         package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+      
