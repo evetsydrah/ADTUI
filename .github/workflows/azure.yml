@@ -59,6 +59,6 @@ jobs:
         login-server: titancrm.azurecr.io
     - name: Build the Docker image
       run: |
-        docker build . --file "ADTUIOriginal/Dockerfile" --tag titancrm.azurecr.io/ADTUI:${{ github.sha }}
-        docker push titancrm.azurecr.io/ADTUI:${{ github.sha }}
+        docker build . --file "ADTUIOriginal/Dockerfile" --tag titancrm.azurecr.io/adtui:${{ github.sha }}
+        docker push titancrm.azurecr.io/adtui:${{ github.sha }}
         
