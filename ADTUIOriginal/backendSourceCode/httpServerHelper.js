@@ -62,7 +62,7 @@ httpServerHelper.prototype.createHTTPServer=function(){
             // Reload started, start web server
             app.listen(app.get('port'), () => {
                 console.log('Web server listening on port ' + app.get('port'))
-                open('http://localhost:' + app.get('port'), function (err) {
+                open('http://adtrocks.azurewebsites.net:' + app.get('port'), function (err) {
                     if (err) throw err;
                 });
             });
@@ -75,7 +75,7 @@ httpServerHelper.prototype.createHTTPServer=function(){
     }else{
         app.listen(app.get('port'), () => {
             console.log('Web server listening on port ' + app.get('port'))
-            open('http://localhost:' + app.get('port'), function (err) {
+            open('http://adtrocks.azurewebsites.net:' + app.get('port'), function (err) {
                 if (err) throw err;
             });
         });
