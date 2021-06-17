@@ -11,7 +11,9 @@ main()
 
 async function main() {
 //use azure resource management API to fetch different instances of ADT
-    const credential = new DefaultAzureCredential();
+    //const credential = new DefaultAzureCredential();
+    const credential = new DefaultAzureCredential({ managedIdentityClientId: "a30353ea-2e52-4146-a6f7-61b68c04729c" });
+    
     try {
         var token = await credential.getToken("https://management.azure.com/.default");
         console.log("DefaultAzureCredential works....")
