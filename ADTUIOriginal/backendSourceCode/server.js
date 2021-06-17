@@ -72,9 +72,10 @@ async function fetchAllADTInstance(aADTManagementClient,credential){
     var dtinstances = await aADTManagementClient.digitalTwins.list()
     if (dtinstances.length == 0) return;
 
-    console.log(bodyObj.value[i].displayName, bodyObj.value[i].subscriptionId)
-
+    //console.log(bodyObj.value[i].displayName, bodyObj.value[i].subscriptionId)
+    
     for (var j = 0; j < dtinstances.length; j++) {
+        console.log(dtinstances[j].hostName)
         var endPoint = "https://" + dtinstances[j].hostName
         var aNewADTClient = new DigitalTwinsClient(endPoint, credential)
         adtClients[endPoint] = aNewADTClient;
