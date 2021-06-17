@@ -16,7 +16,7 @@ async function main() {
     
     try {
         var token = await credential.getToken("https://management.azure.com/.default");
-        console.log("DefaultAzureCredential works....")
+        console.log("DefaultAzureCredential works...." + token)
     } catch (err) {
         //InteractiveBrowserCredential only works for getting one token. but this application need multiple token for different services
         //thus it is not suitable for now.... It waits for future thinking how to achieve when default login not available
@@ -72,7 +72,7 @@ async function fetchAllADTInstance(aADTManagementClient,credential){
     var dtinstances = await aADTManagementClient.digitalTwins.list()
     if (dtinstances.length == 0) return;
 
-    //console.log(bodyObj.value[i].displayName, bodyObj.value[i].subscriptionId)
+    console.log(bodyObj.value[i].displayName, bodyObj.value[i].subscriptionId)
 
     for (var j = 0; j < dtinstances.length; j++) {
         var endPoint = "https://" + dtinstances[j].hostName
