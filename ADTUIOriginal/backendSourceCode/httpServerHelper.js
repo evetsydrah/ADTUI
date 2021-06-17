@@ -25,7 +25,7 @@ httpServerHelper.prototype.createHTTPServer=function(){
         app.set('port', 8000)
         publicDir = path.join(__dirname, '../portalDev/')
     } else {
-        app.set('port', 9000)
+        app.set('port', 8080)
         publicDir = path.join(__dirname, '../portalProduction/')
     }
     
