@@ -14,6 +14,7 @@ var devFlag = false;
 
 function httpServerHelper(adtClients){
     this.adtClients=adtClients
+    console.log(adtclients)
 }
 
 //create http server
