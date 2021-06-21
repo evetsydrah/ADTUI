@@ -1,6 +1,8 @@
 const express = require("express");
 
 function routerQueryADT(adtClients){
+    console.log("Route Query ADT")
+    console.log(adtclients)
     this.adtClients=adtClients;    
     this.router = express.Router();
 
